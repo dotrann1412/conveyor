@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, get_args, Type
 
 from conveyor.pipeline import Pipeline
 
@@ -32,18 +32,30 @@ def create_app(pipeline: Pipeline, prefix: str = "/pipeline") -> Any:
     router = fastapi.APIRouter()
 
     @router.post("/submit")
-    async def submit(payload: Any):
+    async def submit(payload: dict = fastapi.Body()) -> dict:
         if not pipeline.available_slots():
             raise HTTPException(status_code=429, detail="Too many requests")
         return await pipeline.submit(payload)
 
     @router.post("/bulk/submit")
-    async def bulk_submit(payload: list):
+    async def bulk_submit(payload: list[dict] = fastapi.Body()) -> list[dict]:
         if not payload:
             return []
+
         if len(payload) > pipeline.available_slots():
             raise HTTPException(status_code=429, detail="Too many requests")
+
         return await asyncio.gather(*[pipeline.submit(item) for item in payload])
+
+    @router.post("/bulk/submit_nowait")
+    async def bulk_submit_nowait(payload: list[dict] = fastapi.Body()) -> list[bool]:
+        if not payload:
+            return []
+
+        if len(payload) > pipeline.available_slots():
+            raise HTTPException(status_code=429, detail="Too many requests")
+
+        return await asyncio.gather(*[pipeline.submit_nowait(item) for item in payload])
 
     @router.get("/report")
     async def report():

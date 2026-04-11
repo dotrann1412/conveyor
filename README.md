@@ -141,7 +141,7 @@ async def denoise(batch: list, progress=None) -> list:
     for step in range(100):
         batch = do_step(batch, step)
 
-        if progress: # optional; this feature is just used to accurately setting up scheduling 
+        if progress: # optional; this feature is useful to accurately setting up scheduling 
             progress(step + 1, 100)
 
     return batch
@@ -158,6 +158,17 @@ app = create_app(pipeline, prefix="/model")
 # uvicorn myapp:app
 ```
 
+## Benchmark
+
+Stable Diffusion v1.5 (float16, 30 steps, 512x512) on a single RTX 4060 — 10 images generated concurrently:
+
+| Mode | Total time | Avg per request | Speedup |
+|---|---|---|---|
+| **Conveyor pipeline** | **47.32s** | **4.73s** | **1.48x** |
+| Sequential | 70.14s | 7.01s | 1.0x |
+
+The GPU never waits for save/upload — while image N is uploading, image N+1 is already denoising. See full details in [`benchmark.md`](benchmark.md).
+
 ## Examples
 
 | Example | Description |
@@ -165,8 +176,10 @@ app = create_app(pipeline, prefix="/model")
 | [`quickstart.py`](examples/quickstart.py) | Minimal pipeline, no GPU needed |
 | [`yolo_detection.py`](examples/yolo_detection.py) | YOLO object detection with batching |
 | [`face_recognition.py`](examples/face_recognition.py) | Detect → embed → match pipeline |
-| [`stable_diffusion.py`](examples/stable_diffusion.py) | Image generation with progress tracking |
+| [`stable_diffusion_t2i.py`](examples/stable_diffusion_t2i.py) | Image generation with progress tracking |
 
 ## License
 
 MIT
+
+*(images under `examples/images` are collected from [CelebA dataset](https://www.kaggle.com/datasets/jessicali9530/celeba-dataset), and just used for demo purposes)*
