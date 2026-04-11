@@ -53,6 +53,9 @@ async def download_image(request: dict) -> dict:
             random.randint(50, 200),
         ))
 
+    # in production, we can add some extra steps here like 
+    # downloading lora and/or loading it into memory and wait
+
     request["image"] = img.resize((512, 512))
     return request
 
@@ -113,7 +116,6 @@ async def upload_result(result: dict) -> dict:
     result["url"] = f"https://cdn.example.com/edited_{uuid.uuid4().hex}.png"
     logger.info(f"Upload complete: {result['url']}")
     return result
-
 
 # ---------------------------------------------------------------------------
 # Pipeline

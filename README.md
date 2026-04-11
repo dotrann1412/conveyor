@@ -103,7 +103,7 @@ asyncio.run(main())
 
 ## Multi-GPU
 
-For more than 1 GPU. Use `from_factory` to load inference function on each GPU:
+For more than 1 GPU, use `from_factory` to create inference function for each:
 
 ```python
 def load_model() -> torch.nn.Module:
@@ -131,7 +131,7 @@ pipeline = Pipeline(stages=[
     Stage(postprocess, StageConfig(workers=4, stage_name="post")),
 ])
 ```
-
+<!-- 
 ## Progress tracking
 
 Long-running stages (e.g. diffusion) can report step progress:
@@ -147,7 +147,8 @@ async def denoise(batch: list, progress=None) -> list:
     return batch
 ```
 
-Inspect live progress via `pipeline.report()` or the `/report` endpoint.
+Inspect live progress via `pipeline.report()` or the `/report` endpoint. 
+-->
 
 ## Serve over HTTP
 
@@ -176,7 +177,8 @@ The GPU never waits for save/upload — while image N is uploading, image N+1 is
 | [`quickstart.py`](examples/quickstart.py) | Minimal pipeline, no GPU needed |
 | [`yolo_detection.py`](examples/yolo_detection.py) | YOLO object detection with batching |
 | [`face_recognition.py`](examples/face_recognition.py) | Detect → embed → match pipeline |
-| [`stable_diffusion_t2i.py`](examples/stable_diffusion_t2i.py) | Image generation with progress tracking |
+| [`stable_diffusion_t2i.py`](examples/stable_diffusion_t2i.py) | Image generation pipeline |
+| [`stable_diffusion_i2i.py`](examples/stable_diffusion_i2i.py) | Image editing pipeline |
 
 ## License
 
