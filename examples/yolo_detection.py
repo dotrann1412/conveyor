@@ -8,7 +8,7 @@ Run:
 """
 
 from io import BytesIO
-
+import asyncio
 import uvicorn
 
 from conveyor import (
@@ -20,6 +20,7 @@ from conveyor import (
 )
 from conveyor.server import create_app
 import logging
+from functools import partial
 
 logging.basicConfig(level=logging.INFO)
 
@@ -53,13 +54,19 @@ class InferenceResponse(InferenceRequest):
 async def preprocess(request: InferenceRequest) -> InferenceResponseInter:
     """Decode image bytes and resize for YOLO input."""
     
+    loop = asyncio.get_event_loop()
+
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(10.0, connect=None),
         follow_redirects=True,
     ) as client:
         logger.info("Loading image from %s", request.image_url)
         response = await client.get(request.image_url)
-        img = Image.open(BytesIO(response.content)).convert("RGB").resize((640, 640))
+
+        def load_image():
+            return Image.open(BytesIO(response.content)).convert("RGB").resize((640, 640))
+
+        img = await loop.run_in_executor(None, load_image)
 
         return InferenceResponseInter(
             image_url=request.image_url,
@@ -80,7 +87,9 @@ def make_yolo_batch(device_id: int):
         images = [item.loaded_image for item in batch]
         
         logger.info("Detecting %d images", len(images))
-        results = model(images, verbose=False)
+        loop = asyncio.get_event_loop()
+
+        results = await loop.run_in_executor(None, partial(model, images, verbose=False))
         
         for item, result in zip(batch, results):
             item.detections = [
@@ -112,11 +121,11 @@ DEVICE_IDS = [0]  # adjust for multi-GPU: [0, 1, 2, 3]
 
 pipeline = Pipeline(
     stages=[
-        Stage(preprocess, StageConfig(workers=4, stage_name="preprocess")),
+        Stage(preprocess, StageConfig(workers=8, stage_name="preprocess")),
         BatchStage.from_factory(
             fn_factory=make_yolo_batch,
             device_ids=DEVICE_IDS,
-            batch_config=BatchConfig(max_batch_size=16, timeout_s=0.05),
+            batch_config=BatchConfig(max_batch_size=32, timeout_s=2),
             stage_config=StageConfig(stage_name="detect"),
         ),
         Stage(postprocess, StageConfig(workers=4, stage_name="postprocess")),
