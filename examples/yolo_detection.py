@@ -19,6 +19,14 @@ from conveyor import (
     StageConfig,
 )
 from conveyor.server import create_app
+import logging
+
+logging.basicConfig(level=logging.INFO)
+
+logging.getLogger("ultralytics").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -42,19 +50,6 @@ class InferenceResponseInter(InferenceRequest):
 class InferenceResponse(InferenceRequest):
     detections: list[dict] = Field(default_factory=list)
 
-# fastapi does not allow to create app with runtime type annotations, so we need to use these hacky decorators
-def hacky_decorator(func):
-    async def wrapper(payload: dict):
-        return await func(InferenceRequest(**payload))
-    return wrapper
-
-def reversed_hacky_decorator(func):
-    async def wrapper(payload: InferenceResponseInter):
-        return (await func(payload)).model_dump(mode="json")
-    return wrapper
-
-# hmm, this is a bit of a hack to get the request type from the function signature
-@hacky_decorator
 async def preprocess(request: InferenceRequest) -> InferenceResponseInter:
     """Decode image bytes and resize for YOLO input."""
     
@@ -62,6 +57,7 @@ async def preprocess(request: InferenceRequest) -> InferenceResponseInter:
         timeout=httpx.Timeout(10.0, connect=None),
         follow_redirects=True,
     ) as client:
+        logger.info("Loading image from %s", request.image_url)
         response = await client.get(request.image_url)
         img = Image.open(BytesIO(response.content)).convert("RGB").resize((640, 640))
 
@@ -80,8 +76,12 @@ def make_yolo_batch(device_id: int):
     model.to(f"cuda:{device_id}")
 
     async def detect(batch: list[InferenceResponseInter]) -> list[InferenceResponseInter]:
+        logger.info("Detecting %d images", len(batch))
         images = [item.loaded_image for item in batch]
+        
+        logger.info("Detecting %d images", len(images))
         results = model(images, verbose=False)
+        
         for item, result in zip(batch, results):
             item.detections = [
                 {
@@ -95,10 +95,9 @@ def make_yolo_batch(device_id: int):
 
     return detect
 
-# f*cking hacky, but it works
-@reversed_hacky_decorator
 async def postprocess(item: InferenceResponseInter) -> InferenceResponse:
     """Extract detection results."""
+    logger.info("Postprocessing %d detections", len(item.detections or []))
     return InferenceResponse(
         image_url=item.image_url,
         detections=item.detections or [],
@@ -121,7 +120,7 @@ pipeline = Pipeline(
             stage_config=StageConfig(stage_name="detect"),
         ),
         Stage(postprocess, StageConfig(workers=4, stage_name="postprocess")),
-    ]
+    ],
 )
 
 app = create_app(

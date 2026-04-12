@@ -1,16 +1,22 @@
 """Optional FastAPI integration for serving a pipeline over HTTP."""
 
-from __future__ import annotations
-
 import asyncio
 from contextlib import asynccontextmanager
-from typing import Any, get_args, Type
+from typing import Any
 
 from conveyor.pipeline import Pipeline
 
 
-def create_app(pipeline: Pipeline, in_model, out_model, prefix: str = "/pipeline") -> Any:
+def create_app(
+    pipeline: Pipeline,
+    in_model=None,
+    out_model=None,
+    prefix: str = "/pipeline",
+) -> Any:
     """Create a FastAPI application that serves *pipeline*.
+
+    *in_model* and *out_model* specify the Pydantic request / response types.
+    When omitted they are read from ``pipeline.in_type`` / ``pipeline.out_type``.
 
     Requires ``fastapi`` to be installed (optional dependency).
     """
@@ -23,6 +29,9 @@ def create_app(pipeline: Pipeline, in_model, out_model, prefix: str = "/pipeline
             "Install it with: pip install conveyor[server]"
         ) from e
 
+    in_model = in_model or dict
+    out_model = out_model or dict
+
     @asynccontextmanager
     async def lifespan(app: fastapi.FastAPI):
         async with pipeline:
@@ -32,13 +41,13 @@ def create_app(pipeline: Pipeline, in_model, out_model, prefix: str = "/pipeline
     router = fastapi.APIRouter()
 
     @router.post("/submit")
-    async def submit(payload: in_model = fastapi.Body()) -> out_model:
+    async def submit(payload: in_model = fastapi.Body()) -> out_model:  # type: ignore[valid-type]
         if not pipeline.available_slots():
             raise HTTPException(status_code=429, detail="Too many requests")
         return await pipeline.submit(payload)
 
     @router.post("/bulk/submit")
-    async def bulk_submit(payload: list[in_model] = fastapi.Body()) -> list[out_model]:
+    async def bulk_submit(payload: list[in_model] = fastapi.Body()) -> list[out_model]:  # type: ignore[valid-type]
         if not payload:
             return []
 
@@ -48,7 +57,7 @@ def create_app(pipeline: Pipeline, in_model, out_model, prefix: str = "/pipeline
         return await asyncio.gather(*[pipeline.submit(item) for item in payload])
 
     @router.post("/bulk/submit_nowait")
-    async def bulk_submit_nowait(payload: list[in_model] = fastapi.Body()) -> list[bool]:
+    async def bulk_submit_nowait(payload: list[in_model] = fastapi.Body()) -> list[bool]:  # type: ignore[valid-type]
         if not payload:
             return []
 
