@@ -90,6 +90,7 @@ class Pipeline(Generic[T]):
         cnt_stage_instances: dict[str, int] = {
             stage.config.stage_name: 0 for stage in self._stages
         }
+
         for worker, stage in zip(self._workers, self._stages):
             if not worker.done():
                 cnt_stage_instances[stage.config.stage_name] += 1

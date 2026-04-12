@@ -9,7 +9,7 @@ from typing import Any, get_args, Type
 from conveyor.pipeline import Pipeline
 
 
-def create_app(pipeline: Pipeline, prefix: str = "/pipeline") -> Any:
+def create_app(pipeline: Pipeline, in_model, out_model, prefix: str = "/pipeline") -> Any:
     """Create a FastAPI application that serves *pipeline*.
 
     Requires ``fastapi`` to be installed (optional dependency).
@@ -32,13 +32,13 @@ def create_app(pipeline: Pipeline, prefix: str = "/pipeline") -> Any:
     router = fastapi.APIRouter()
 
     @router.post("/submit")
-    async def submit(payload: dict = fastapi.Body()) -> dict:
+    async def submit(payload: in_model = fastapi.Body()) -> out_model:
         if not pipeline.available_slots():
             raise HTTPException(status_code=429, detail="Too many requests")
         return await pipeline.submit(payload)
 
     @router.post("/bulk/submit")
-    async def bulk_submit(payload: list[dict] = fastapi.Body()) -> list[dict]:
+    async def bulk_submit(payload: list[in_model] = fastapi.Body()) -> list[out_model]:
         if not payload:
             return []
 
@@ -48,7 +48,7 @@ def create_app(pipeline: Pipeline, prefix: str = "/pipeline") -> Any:
         return await asyncio.gather(*[pipeline.submit(item) for item in payload])
 
     @router.post("/bulk/submit_nowait")
-    async def bulk_submit_nowait(payload: list[dict] = fastapi.Body()) -> list[bool]:
+    async def bulk_submit_nowait(payload: list[in_model] = fastapi.Body()) -> list[bool]:
         if not payload:
             return []
 

@@ -32,7 +32,7 @@ import httpx
 class InferenceRequest(BaseModel):
     image_url: str = Field(default="https://ultralytics.com/images/bus.jpg")
     
-class InferenceResponseTmp(InferenceRequest):
+class InferenceResponseInter(InferenceRequest):
     loaded_image: Image.Image
     detections: list[dict] | None = None
 
@@ -49,13 +49,13 @@ def hacky_decorator(func):
     return wrapper
 
 def reversed_hacky_decorator(func):
-    async def wrapper(payload: InferenceResponseTmp):
+    async def wrapper(payload: InferenceResponseInter):
         return (await func(payload)).model_dump(mode="json")
     return wrapper
 
 # hmm, this is a bit of a hack to get the request type from the function signature
 @hacky_decorator
-async def preprocess(request: InferenceRequest) -> InferenceResponseTmp:
+async def preprocess(request: InferenceRequest) -> InferenceResponseInter:
     """Decode image bytes and resize for YOLO input."""
     
     async with httpx.AsyncClient(
@@ -65,7 +65,7 @@ async def preprocess(request: InferenceRequest) -> InferenceResponseTmp:
         response = await client.get(request.image_url)
         img = Image.open(BytesIO(response.content)).convert("RGB").resize((640, 640))
 
-        return InferenceResponseTmp(
+        return InferenceResponseInter(
             image_url=request.image_url,
             loaded_image=img,
             detections=None,
@@ -79,7 +79,7 @@ def make_yolo_batch(device_id: int):
     model = YOLO("yolov8n.pt")
     model.to(f"cuda:{device_id}")
 
-    async def detect(batch: list[InferenceResponseTmp]) -> list[InferenceResponseTmp]:
+    async def detect(batch: list[InferenceResponseInter]) -> list[InferenceResponseInter]:
         images = [item.loaded_image for item in batch]
         results = model(images, verbose=False)
         for item, result in zip(batch, results):
@@ -97,7 +97,7 @@ def make_yolo_batch(device_id: int):
 
 # f*cking hacky, but it works
 @reversed_hacky_decorator
-async def postprocess(item: InferenceResponseTmp) -> InferenceResponse:
+async def postprocess(item: InferenceResponseInter) -> InferenceResponse:
     """Extract detection results."""
     return InferenceResponse(
         image_url=item.image_url,
@@ -124,7 +124,12 @@ pipeline = Pipeline(
     ]
 )
 
-app = create_app(pipeline, prefix="/yolo")
+app = create_app(
+    pipeline, 
+    in_model=InferenceRequest, 
+    out_model=InferenceResponse, 
+    prefix="/yolo"
+)
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
