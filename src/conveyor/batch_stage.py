@@ -2,16 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import inspect
 import time
 from typing import Any, Awaitable, Callable, Generic, TypeVar
 
-from conveyor._sentinel import _SENTINEL
+from conveyor.types import _SENTINEL
 from conveyor.config import BatchConfig, StageConfig
 from conveyor.progress import ProgressReporter, accepts_progress
 from conveyor.tracker import SimpleTracker
+from concurrent.futures import ThreadPoolExecutor
 
 T = TypeVar("T")
-
 
 class BatchStage(Generic[T]):
     """A stage that collects items into batches before processing.
@@ -22,14 +23,13 @@ class BatchStage(Generic[T]):
 
     def __init__(
         self,
-        fn: Callable[..., Awaitable[Any]],
+        fn: Callable[..., Awaitable[Any] | Any],
         config: BatchConfig | None = None,
         stage_config: StageConfig | None = None,
     ):
         self.batch_config = config or BatchConfig()
         self.config = stage_config or StageConfig(workers=1)
-        self._fns: list[Callable[..., Awaitable[Any]]] = [fn] * self.config.workers
-        self._fn_progress: list[bool] = [accepts_progress(fn)] * self.config.workers
+        self._fns: list[Callable[..., Awaitable[Any] | Any]] = [fn] * self.config.workers
         self._in_q: asyncio.Queue = asyncio.Queue(maxsize=self.config.max_queue_size)
         self._tracker = SimpleTracker(
             identifier=self.config.stage_name,
@@ -38,10 +38,14 @@ class BatchStage(Generic[T]):
             batch_configs=[self.batch_config for _ in range(self.config.workers)],
         )
 
+    @property
+    def fns(self) -> list[Callable[..., Awaitable[Any] | Any]]:
+        return self._fns
+
     @classmethod
     def from_factory(
         cls,
-        fn_factory: Callable[[int], Callable[..., Awaitable[Any]]],
+        fn_factory: Callable[[int], Callable[..., Awaitable[Any] | Any]],
         device_ids: list[int],
         batch_config: BatchConfig | None = None,
         stage_config: StageConfig | None = None,
@@ -55,7 +59,6 @@ class BatchStage(Generic[T]):
         instance.config = stage_config
         fns = [fn_factory(did) for did in device_ids]
         instance._fns = fns
-        instance._fn_progress = [accepts_progress(f) for f in fns]
         instance._in_q = asyncio.Queue(maxsize=stage_config.max_queue_size)
         instance._tracker = SimpleTracker(
             identifier=stage_config.stage_name,
@@ -69,15 +72,31 @@ class BatchStage(Generic[T]):
     def tracker(self) -> SimpleTracker:
         return self._tracker
 
+    def _run_fn(
+        self, 
+        fn: Callable[..., Awaitable[Any] | Any], 
+        args: tuple[Any, ...],
+        executor: ThreadPoolExecutor | None = None,
+    ) -> Awaitable[Any]:
+        loop = asyncio.get_event_loop()
+    
+        if inspect.iscoroutinefunction(fn):
+            return fn(*args)
+
+        assert executor is not None, "Executor is required for non-async functions"
+        return loop.run_in_executor(executor, fn, *args)
+
     async def _worker(
         self,
         next_q: asyncio.Queue | None,
         results: dict[int, asyncio.Future],
         runner_index: int,
+        executor: ThreadPoolExecutor | None = None,
     ):
         fn = self._fns[runner_index]
         reporter = self._tracker.in_progress[runner_index]
-        use_progress = self._fn_progress[runner_index]
+        use_progress = accepts_progress(fn)
+
         log = logging.getLogger(f"conveyor.batch/{self.config.stage_name}:{runner_index}")
         log.info("Starting worker")
 
@@ -113,10 +132,8 @@ class BatchStage(Generic[T]):
                 t0 = time.perf_counter()
                 log.info("Start batch processing %d requests", len(payloads))
 
-                if use_progress:
-                    outputs = await fn(payloads, progress=reporter)
-                else:
-                    outputs = await fn(payloads)
+                args = (payloads, reporter) if use_progress else (payloads,)
+                outputs = await self._run_fn(fn, args, executor=executor)
 
                 log.info("Finished batch %d requests in %.2fs", len(payloads), time.perf_counter() - t0)
                 self._tracker.on_process_done(time.perf_counter() - t0, success=True)

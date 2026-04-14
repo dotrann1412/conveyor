@@ -2,16 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import inspect
 import time
 from typing import Any, Awaitable, Callable, Generic, TypeVar
 
-from conveyor._sentinel import _SENTINEL
+from conveyor.types import _SENTINEL
 from conveyor.config import BatchConfig, StageConfig
 from conveyor.progress import ProgressReporter, accepts_progress
 from conveyor.tracker import SimpleTracker
+from concurrent.futures import ThreadPoolExecutor
 
 T = TypeVar("T")
-
 
 class Stage(Generic[T]):
     """A single processing stage in the pipeline.
@@ -22,12 +23,11 @@ class Stage(Generic[T]):
 
     def __init__(
         self,
-        fn: Callable[..., Awaitable[Any]],
+        fn: Callable[..., Awaitable[Any] | Any],
         config: StageConfig | None = None,
     ):
         self.config = config or StageConfig()
-        self._fns: list[Callable[..., Awaitable[Any]]] = [fn] * self.config.workers
-        self._fn_progress: list[bool] = [accepts_progress(fn)] * self.config.workers
+        self._fns: list[Callable[..., Awaitable[Any] | Any]] = [fn] * self.config.workers
         self._in_q: asyncio.Queue = asyncio.Queue(maxsize=self.config.max_queue_size)
         self._tracker = SimpleTracker(
             identifier=self.config.stage_name,
@@ -36,10 +36,14 @@ class Stage(Generic[T]):
             batch_configs=[BatchConfig(max_batch_size=1) for _ in range(self.config.workers)],
         )
 
+    @property
+    def fns(self) -> list[Callable[..., Awaitable[Any] | Any]]:
+        return self._fns
+
     @classmethod
     def from_factory(
         cls,
-        fn_factory: Callable[[int], Callable[..., Awaitable[Any]]],
+        fn_factory: Callable[[int], Callable[..., Awaitable[Any] | Any]],
         device_ids: list[int],
         config: StageConfig | None = None,
     ) -> Stage[T]:
@@ -50,7 +54,6 @@ class Stage(Generic[T]):
         instance.config = config
         fns = [fn_factory(did) for did in device_ids]
         instance._fns = fns
-        instance._fn_progress = [accepts_progress(f) for f in fns]
         instance._in_q = asyncio.Queue(maxsize=config.max_queue_size)
         instance._tracker = SimpleTracker(
             identifier=config.stage_name,
@@ -64,15 +67,30 @@ class Stage(Generic[T]):
     def tracker(self) -> SimpleTracker:
         return self._tracker
 
+    def _run_fn(
+        self, 
+        fn: Callable[..., Awaitable[Any] | Any], 
+        args: tuple[Any, ...],
+        executor: ThreadPoolExecutor | None = None,
+    ) -> Awaitable[Any]:
+        loop = asyncio.get_event_loop()
+
+        if inspect.iscoroutinefunction(fn):
+            return fn(*args)
+
+        assert executor is not None, "Executor is required for non-async functions"
+        return loop.run_in_executor(executor, fn, *args)
+
     async def _worker(
         self,
         next_q: asyncio.Queue | None,
         results: dict[int, asyncio.Future],
         runner_index: int,
+        executor: ThreadPoolExecutor | None = None,
     ):
         fn = self._fns[runner_index]
         reporter = self._tracker.in_progress[runner_index]
-        use_progress = self._fn_progress[runner_index]
+        use_progress = accepts_progress(fn)
         log = logging.getLogger(f"conveyor.stage/{self.config.stage_name}:{runner_index}")
         log.info("Starting worker")
 
@@ -89,10 +107,8 @@ class Stage(Generic[T]):
                 t0 = time.perf_counter()
                 log.info("Start processing request %s", req_id)
 
-                if use_progress:
-                    result = await fn(payload, progress=reporter)
-                else:
-                    result = await fn(payload)
+                args = (payload, reporter) if use_progress else (payload,)
+                result = await self._run_fn(fn, args, executor=executor)
 
                 log.info("Finished request %s in %.2fs", req_id, time.perf_counter() - t0)
 

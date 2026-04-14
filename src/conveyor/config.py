@@ -19,4 +19,4 @@ class StageConfig:
 @dataclass
 class BatchConfig:
     max_batch_size: int = 32
-    timeout_s: float = 0.05
+    timeout_s: float = 1

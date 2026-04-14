@@ -21,11 +21,12 @@ from conveyor import (
     StageConfig,
 )
 
+import logging 
+logging.basicConfig(level=logging.INFO)
 
 async def preprocess(data: str) -> str:
     await asyncio.sleep(0.02)
     return data.upper()
-
 
 async def model_batch_infer(batch: list[str], progress=None) -> list[str]:
     steps = 10
@@ -39,11 +40,11 @@ async def model_batch_infer(batch: list[str], progress=None) -> list[str]:
     return [f"[result:{item}]" for item in batch]
 
 
-async def model_infer(data: str, progress=None) -> str:
+def model_infer(data: str, progress=None) -> str:
     steps = 10
 
     for step in range(steps):
-        await asyncio.sleep(0.01 / 4) # simulate a single request
+        time.sleep(0.01 / 4) # simulate a single request
 
         if progress:
             progress(step + 1, steps)
@@ -93,7 +94,7 @@ async def main():
 
     for i in range(20):
         t_start = time.perf_counter()
-        result = await postprocess_fn(await model_fn(await preprocess_fn(f"request-{i}")))
+        result = await postprocess_fn(model_fn(await preprocess_fn(f"request-{i}")))
         end_time = time.perf_counter()
         sequential_processing_time += end_time - t_start
 

@@ -20,7 +20,6 @@ from conveyor import (
 )
 from conveyor.server import create_app
 import logging
-from functools import partial
 
 logging.basicConfig(level=logging.INFO)
 
@@ -82,14 +81,13 @@ def make_yolo_batch(device_id: int):
     model = YOLO("yolov8n.pt")
     model.to(f"cuda:{device_id}")
 
-    async def detect(batch: list[InferenceResponseInter]) -> list[InferenceResponseInter]:
+    def detect(batch: list[InferenceResponseInter]) -> list[InferenceResponseInter]:
         logger.info("Detecting %d images", len(batch))
         images = [item.loaded_image for item in batch]
         
         logger.info("Detecting %d images", len(images))
-        loop = asyncio.get_event_loop()
 
-        results = await loop.run_in_executor(None, partial(model, images, verbose=False))
+        results = model(images, verbose=False)
         
         for item, result in zip(batch, results):
             item.detections = [
