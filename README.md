@@ -176,7 +176,6 @@ The GPU never waits for save/upload — while image N is uploading, image N+1 is
 |---|---|
 | [`quickstart.py`](examples/quickstart.py) | Minimal pipeline, no GPU needed |
 | [`yolo_detection.py`](examples/yolo_detection.py) | YOLO object detection with batching |
-| [`face_recognition.py`](examples/face_recognition.py) | Detect → embed → match pipeline |
 | [`stable_diffusion_t2i.py`](examples/stable_diffusion_t2i.py) | Image generation pipeline |
 | [`stable_diffusion_i2i.py`](examples/stable_diffusion_i2i.py) | Image editing pipeline |
 
