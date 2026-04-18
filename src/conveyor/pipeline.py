@@ -120,21 +120,30 @@ class Pipeline(Generic[T]):
                 1 for w in self._workers[worker_idx : worker_idx + n_fns]
                 if not w.done()
             )
+
+            qsize = stage.in_q.qsize()
+            capacity = stage.in_q.maxsize
+
             stage_infos.append(
                 StageInfo(
                     name=stage.stage_name,
                     workers_alive=alive,
                     workers_total=n_fns,
-                    queue_depth=stage.in_q.qsize(),
-                    queue_capacity=stage.in_q.maxsize,
+                    queue_depth=qsize,
+                    queue_capacity=capacity,
+                    utilization=qsize / capacity,
                 )
             )
+
             worker_idx += n_fns
+
+        utilization = max(si.utilization for si in stage_infos)
 
         is_available = (
             self._running
             and len(self._stages) > 0
             and all(si.workers_alive > 0 for si in stage_infos)
+            and utilization < 1.0
         )
 
         return StatusReport(
@@ -142,6 +151,7 @@ class Pipeline(Generic[T]):
             available=is_available,
             slots=self.available_slots(),
             stages=stage_infos,
+            utilization=utilization
         )
 
     async def __aenter__(self):
