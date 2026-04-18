@@ -24,9 +24,7 @@ from PIL import Image
 
 from conveyor import (
     Pipeline,
-    ProgressReporter,
     Stage,
-    StageConfig,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -62,23 +60,19 @@ async def download_image(request: dict) -> dict:
 
 def make_img2img_stage(device_id: int):
     """Load a Stable Diffusion img2img pipeline on a specific GPU."""
-    from diffusers import StableDiffusionImg2ImgPipeline
+    from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion_img2img import StableDiffusionImg2ImgPipeline
 
     pipe = StableDiffusionImg2ImgPipeline.from_pretrained(
         "runwayml/stable-diffusion-v1-5",
         torch_dtype=torch.float16,
     ).to(f"cuda:{device_id}")
 
-    async def edit(request: dict, progress: ProgressReporter) -> dict:
+    async def edit(request: dict) -> dict:
         prompt = request["prompt"]
         init_image = request["image"]
         num_steps = request.get("num_steps", 30)
         strength = request.get("strength", 0.75)
         guidance_scale = request.get("guidance_scale", 7.5)
-
-        def callback(pipe, step, timestep, kwargs):
-            progress(step + 1, num_steps)
-            return kwargs
 
         loop = asyncio.get_event_loop()
 
@@ -90,7 +84,6 @@ def make_img2img_stage(device_id: int):
                 strength=strength,
                 num_inference_steps=num_steps,
                 guidance_scale=guidance_scale,
-                callback_on_step_end=callback,
             ).images[0]
 
         request["result_image"] = await loop.run_in_executor(None, run)
@@ -134,14 +127,11 @@ inputs = [
 async def main():
     pipeline = Pipeline(
         stages=[
-            Stage(download_image, StageConfig(workers=4, stage_name="download")),
-            Stage.from_factory(
-                fn_factory=make_img2img_stage,
-                device_ids=DEVICE_IDS,
-                config=StageConfig(stage_name="img2img"),
-            ),
-            Stage(upload_result, StageConfig(workers=4, stage_name="upload")),
-        ]
+            Stage([download_image] * 4, queue_size_per_worker=4, stage_name="download"),
+            Stage([make_img2img_stage(did) for did in DEVICE_IDS], queue_size_per_worker=4, stage_name="img2img"),
+            Stage([upload_result] * 4, queue_size_per_worker=4, stage_name="upload"),
+        ],
+        name="stable-diffusion-i2i",
     )
 
     # --- Pipeline run ---
@@ -164,7 +154,7 @@ async def main():
     seq_time = 0.0
     for i, req in enumerate(inputs):
         t0 = time.perf_counter()
-        r = await upload_fn(await edit_fn(await download_fn(req), progress=ProgressReporter()))
+        r = await upload_fn(await edit_fn(await download_fn(req)))
         seq_time += time.perf_counter() - t0
 
     print(f"Sequential: {seq_time:.2f}s total, {seq_time / len(inputs):.2f}s avg")

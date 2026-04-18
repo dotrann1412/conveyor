@@ -5,24 +5,28 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from conveyor.pipeline import Pipeline
+from conveyor.metrics import _HAS_PROMETHEUS
 
 
 def create_app(
     pipeline: Pipeline,
     in_model=None,
-    out_model=None,
-    prefix: str = "/pipeline",
+    out_model=None
 ) -> Any:
     """Create a FastAPI application that serves *pipeline*.
 
     *in_model* and *out_model* specify the Pydantic request / response types.
-    When omitted they are read from ``pipeline.in_type`` / ``pipeline.out_type``.
+    When omitted they default to plain dicts.
 
     Requires ``fastapi`` to be installed (optional dependency).
+
+    If ``prometheus_client`` is installed, a ``GET /metrics`` endpoint is
+    added at the application root for Prometheus / Grafana scraping.
     """
     try:
         import fastapi
         from fastapi.exceptions import HTTPException
+        from fastapi.responses import Response
     except ImportError as e:
         raise ImportError(
             "fastapi is required for create_app(). "
@@ -78,5 +82,17 @@ def create_app(
     async def start():
         await pipeline.start()
 
-    app.include_router(router, prefix=prefix)
+    api_endpoint_prefix = "/" + pipeline.name.strip("/")
+    app.include_router(router, prefix=api_endpoint_prefix)
+
+    if _HAS_PROMETHEUS:
+        from conveyor.metrics import REGISTRY, generate_latest, CONTENT_TYPE_LATEST
+
+        @app.get("/metrics")
+        async def prometheus_metrics():
+            return Response(
+                content=generate_latest(REGISTRY),
+                media_type=CONTENT_TYPE_LATEST,
+            )
+
     return app

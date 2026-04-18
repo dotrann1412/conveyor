@@ -14,11 +14,9 @@ import asyncio
 import time
 
 from conveyor import (
-    BatchConfig,
     BatchStage,
     Pipeline,
     Stage,
-    StageConfig,
 )
 
 import logging 
@@ -59,14 +57,17 @@ async def postprocess(data: str) -> str:
 async def main():
     pipeline = Pipeline(
         stages=[
-            Stage(preprocess, StageConfig(workers=4, stage_name="preprocess")),
+            Stage([preprocess] * 4, queue_size_per_worker=1024, stage_name="preprocess"),
             BatchStage(
-                model_batch_infer,
-                BatchConfig(max_batch_size=8, timeout_s=0.05),
-                StageConfig(workers=1, stage_name="model"),
+                [model_batch_infer] * 1,
+                worker_queue_size=128,
+                max_batch_size=32,
+                timeout_s=0.05,
+                stage_name="model",
             ),
-            Stage(postprocess, StageConfig(workers=4, stage_name="postprocess")),
-        ]
+            Stage([postprocess] * 4, queue_size_per_worker=1024, stage_name="postprocess"),
+        ],
+        name="quickstart",
     )
 
     pipeline_processing_time = 0
@@ -82,8 +83,6 @@ async def main():
 
         pipeline_processing_time = elapsed
         print(f"... ({len(results)} total in {pipeline_processing_time:.3f}s, average time per request: {pipeline_processing_time / len(results):.3f}s)")
-
-    del pipeline
 
     # test the sequential pipeline
     preprocess_fn = preprocess
@@ -104,6 +103,16 @@ async def main():
     print(f"Pipeline processing time: {pipeline_processing_time:.3f}s, average time per request: {pipeline_processing_time / 20:.3f}s")
     print(f"Sequential processing time: {sequential_processing_time:.3f}s, average time per request: {sequential_processing_time / 20:.3f}s")
     print("--------------------------------")
+
+
+    from conveyor.server import create_app
+    app = create_app(pipeline, str, str)
+    
+    import uvicorn
+    config = uvicorn.Config(app, host="0.0.0.0", port=8000, reload=True)
+    server = uvicorn.Server(config)
+
+    await server.serve() 
 
 if __name__ == "__main__":
     asyncio.run(main())

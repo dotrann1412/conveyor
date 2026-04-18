@@ -3,18 +3,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import inspect
+import os
 import time
 from typing import Any, Awaitable, Callable, Generic, TypeVar
 
-from conveyor.types import _SENTINEL
-from conveyor.config import BatchConfig, StageConfig
-from conveyor.progress import ProgressReporter, accepts_progress
-from conveyor.tracker import SimpleTracker
+from conveyor.types import _SENTINEL, IStage
+from conveyor.metrics import StageMetrics
 from concurrent.futures import ThreadPoolExecutor
 
 T = TypeVar("T")
 
-class Stage(Generic[T]):
+
+class Stage(Generic[T], IStage):
     """A single processing stage in the pipeline.
 
     Runs *fn* on each item independently, with *workers* concurrent tasks
@@ -23,53 +23,30 @@ class Stage(Generic[T]):
 
     def __init__(
         self,
-        fn: Callable[..., Awaitable[Any] | Any],
-        config: StageConfig | None = None,
+        fns: list[Callable[..., Awaitable[Any] | Any]],
+        queue_size_per_worker: int,
+        stage_name: str | None = None,
     ):
-        self.config = config or StageConfig()
-        self._fns: list[Callable[..., Awaitable[Any] | Any]] = [fn] * self.config.workers
-        self._in_q: asyncio.Queue = asyncio.Queue(maxsize=self.config.max_queue_size)
-        self._tracker = SimpleTracker(
-            identifier=self.config.stage_name,
-            max_records=self.config.max_log_records,
-            in_progress=[ProgressReporter() for _ in range(self.config.workers)],
-            batch_configs=[BatchConfig(max_batch_size=1) for _ in range(self.config.workers)],
-        )
+        self._fns: list[Callable[..., Awaitable[Any] | Any]] = fns
+        self._in_q: asyncio.Queue = asyncio.Queue(maxsize=len(fns) * queue_size_per_worker)
+        self._stage_name: str = stage_name or os.urandom(2).hex()
+        self._metrics: StageMetrics | None = None
+
+    @property
+    def in_q(self) -> asyncio.Queue:
+        return self._in_q
+
+    @property
+    def stage_name(self) -> str:
+        return self._stage_name
 
     @property
     def fns(self) -> list[Callable[..., Awaitable[Any] | Any]]:
         return self._fns
 
-    @classmethod
-    def from_factory(
-        cls,
-        fn_factory: Callable[[int], Callable[..., Awaitable[Any] | Any]],
-        device_ids: list[int],
-        config: StageConfig | None = None,
-    ) -> Stage[T]:
-        config = config or StageConfig()
-        config.device_ids = device_ids
-        config.workers = len(device_ids)
-        instance = cls.__new__(cls)
-        instance.config = config
-        fns = [fn_factory(did) for did in device_ids]
-        instance._fns = fns
-        instance._in_q = asyncio.Queue(maxsize=config.max_queue_size)
-        instance._tracker = SimpleTracker(
-            identifier=config.stage_name,
-            max_records=config.max_log_records,
-            in_progress=[ProgressReporter() for _ in range(config.workers)],
-            batch_configs=[BatchConfig(max_batch_size=1) for _ in range(config.workers)],
-        )
-        return instance
-
-    @property
-    def tracker(self) -> SimpleTracker:
-        return self._tracker
-
     def _run_fn(
-        self, 
-        fn: Callable[..., Awaitable[Any] | Any], 
+        self,
+        fn: Callable[..., Awaitable[Any] | Any],
         args: tuple[Any, ...],
         executor: ThreadPoolExecutor | None = None,
     ) -> Awaitable[Any]:
@@ -86,13 +63,13 @@ class Stage(Generic[T]):
         next_q: asyncio.Queue | None,
         results: dict[int, asyncio.Future],
         runner_index: int,
+        metrics: StageMetrics,
         executor: ThreadPoolExecutor | None = None,
     ):
         fn = self._fns[runner_index]
-        reporter = self._tracker.in_progress[runner_index]
-        use_progress = accepts_progress(fn)
-        log = logging.getLogger(f"conveyor.stage/{self.config.stage_name}:{runner_index}")
-        log.info("Starting worker")
+
+        logger = logging.getLogger(f"{self._stage_name}:{runner_index}")
+        logger.info("Starting worker")
 
         while True:
             item = await self._in_q.get()
@@ -102,29 +79,29 @@ class Stage(Generic[T]):
                 break
 
             req_id, payload = item
+            t0 = time.perf_counter()
 
             try:
-                t0 = time.perf_counter()
-                log.info("Start processing request %s", req_id)
+                result = await self._run_fn(fn, (payload,), executor=executor)
+                elapsed = time.perf_counter() - t0
 
-                args = (payload, reporter) if use_progress else (payload,)
-                result = await self._run_fn(fn, args, executor=executor)
+                logger.info("Finished request %s in %.2fs", req_id, elapsed)
 
-                log.info("Finished request %s in %.2fs", req_id, time.perf_counter() - t0)
+                metrics.record_success(1, elapsed)
 
                 if next_q is not None:
                     await next_q.put((req_id, result))
                 elif req_id in results:
                     results[req_id].set_result(result)
 
-                self._tracker.on_process_done(time.perf_counter() - t0, success=True)
-
             except Exception as e:
-                log.error("Error processing request %s: %s", req_id, e)
-                self._tracker.on_process_done(time.perf_counter() - t0, success=False)
+                elapsed = time.perf_counter() - t0
+                logger.error("Error processing request %s: %s", req_id, e)
+
+                metrics.record_failure(1, elapsed)
+
                 if req_id in results and not results[req_id].done():
                     results[req_id].set_exception(e)
 
             finally:
-                reporter.reset()
                 self._in_q.task_done()

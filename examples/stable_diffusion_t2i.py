@@ -19,7 +19,6 @@ from conveyor import (
     Pipeline,
     ProgressReporter,
     Stage,
-    StageConfig,
 )
 
 import logging
@@ -41,19 +40,13 @@ def make_diffusion_stage(device_id: int):
         torch_dtype=torch.float16,
     ).to(f"cuda:{device_id}")
 
-    async def generate(request: dict, progress: ProgressReporter) -> dict:
+    async def generate(request: dict) -> dict:
         prompts = request["prompt"]
 
         num_steps = request.setdefault("num_steps", 30)
         guidance_scale = request.setdefault("guidance_scale", 7.5)
         width = request.setdefault("width", 512)
         height = request.setdefault("height", 512)
-
-        # support by diffusers
-        def callback(pipe, step, timestep, kwargs):
-            if progress:
-                progress(step + 1, num_steps)
-            return kwargs
 
         loop = asyncio.get_event_loop()
 
@@ -65,7 +58,6 @@ def make_diffusion_stage(device_id: int):
                 guidance_scale=guidance_scale,
                 width=width,
                 height=height,
-                callback_on_step_end=callback,
             ).images[0]
 
         request["image"] = await loop.run_in_executor(None, run)
@@ -101,13 +93,10 @@ DEVICE_IDS = [0]  # [0, 1] for two GPUs
 async def main():
     pipeline = Pipeline(
         stages=[
-            Stage.from_factory(
-                fn_factory=make_diffusion_stage,
-                device_ids=DEVICE_IDS,
-                config=StageConfig(workers=1, stage_name="denoise"),
-            ),
-            Stage(save_image, StageConfig(workers=2, stage_name="save")),
-        ]
+            Stage([make_diffusion_stage(did) for did in DEVICE_IDS], queue_size_per_worker=4, stage_name="denoise"),
+            Stage([save_image] * 2, queue_size_per_worker=4, stage_name="save"),
+        ],
+        name="stable-diffusion-t2i",
     )
 
     inputs = [

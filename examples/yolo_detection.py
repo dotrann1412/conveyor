@@ -12,11 +12,9 @@ import asyncio
 import uvicorn
 
 from conveyor import (
-    BatchConfig,
     BatchStage,
     Pipeline,
     Stage,
-    StageConfig,
 )
 from conveyor.server import create_app
 import logging
@@ -119,22 +117,23 @@ DEVICE_IDS = [0]  # adjust for multi-GPU: [0, 1, 2, 3]
 
 pipeline = Pipeline(
     stages=[
-        Stage(preprocess, StageConfig(workers=8, stage_name="preprocess")),
-        BatchStage.from_factory(
-            fn_factory=make_yolo_batch,
-            device_ids=DEVICE_IDS,
-            batch_config=BatchConfig(max_batch_size=32, timeout_s=2),
-            stage_config=StageConfig(stage_name="detect"),
+        Stage([preprocess] * 8, queue_size_per_worker=4, stage_name="preprocess"),
+        BatchStage(
+            [make_yolo_batch(did) for did in DEVICE_IDS],
+            worker_queue_size=4,
+            max_batch_size=32,
+            timeout_s=2,
+            stage_name="detect",
         ),
-        Stage(postprocess, StageConfig(workers=4, stage_name="postprocess")),
+        Stage([postprocess] * 4, queue_size_per_worker=4, stage_name="postprocess"),
     ],
+    name="yolo-detection",
 )
 
 app = create_app(
     pipeline, 
     in_model=InferenceRequest, 
     out_model=InferenceResponse, 
-    prefix="/yolo"
 )
 
 if __name__ == "__main__":

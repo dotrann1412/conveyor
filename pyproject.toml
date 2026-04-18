@@ -20,6 +20,8 @@ classifiers = [
 
 [project.optional-dependencies]
 server = ["fastapi>=0.100", "uvicorn>=0.20"]
+metrics = ["prometheus_client>=0.20"]
+all = ["fastapi>=0.100", "uvicorn>=0.20", "prometheus_client>=0.20"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/conveyor"]

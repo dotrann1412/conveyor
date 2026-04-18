@@ -1,20 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from itertools import count
 from typing import Any, Generic, TypeVar
 
-from conveyor.types import _SENTINEL
-from conveyor.batch_stage import BatchStage
-from conveyor.stage import Stage
-from conveyor.tracker import StatusReport
-import inspect
+from conveyor.types import _SENTINEL, IStage
+from conveyor.metrics import StageMetrics
+from conveyor.tracker import StatusReport, StageInfo
 from concurrent.futures import ThreadPoolExecutor
 
 T = TypeVar("T")
 logger = logging.getLogger(__name__)
-AnyStage = Stage | BatchStage
+
 
 class Pipeline(Generic[T]):
     """Streaming inference pipeline with stage-level parallelism.
@@ -23,36 +22,47 @@ class Pipeline(Generic[T]):
     while request A is in the model stage, request B can be preprocessing.
     """
 
-    def __init__(self, stages: list[AnyStage]):
+    def __init__(self, stages: list[IStage], *, name: str = "default"):
         self._stages = stages
+        self._name = name
         self._futures: dict[int, asyncio.Future] = {}
         self._counter = count()
         self._workers: list[asyncio.Task] = []
         self._running = False
         self._pool: ThreadPoolExecutor | None = None
 
+    @property
+    def name(self) -> str:
+        return self._name
+
     async def start(self):
         if self._running:
             return
 
         self._running = True
-        pool_size = 0
 
-        for i, stage in enumerate(self._stages):
+        pool_size = 0
+        for stage in self._stages:
             for fn in stage.fns:
-                if inspect.iscoroutinefunction(fn):
+                if not inspect.iscoroutinefunction(fn):
                     pool_size += 1
 
         if pool_size > 0:
-            logger.info(f"Starting {pool_size} worker threads")
+            logger.info("Starting thread pool with %d workers", pool_size)
             self._pool = ThreadPoolExecutor(max_workers=pool_size)
 
         for i, stage in enumerate(self._stages):
-            next_q = self._stages[i + 1]._in_q if i + 1 < len(self._stages) else None
-            for runner_index in range(stage.config.workers):
+            next_q = self._stages[i + 1].in_q if i + 1 < len(self._stages) else None
+            for runner_index in range(len(stage.fns)):
                 self._workers.append(
                     asyncio.create_task(
-                        stage._worker(next_q, self._futures, runner_index, self._pool)
+                        stage._worker(
+                            next_q, 
+                            self._futures, 
+                            runner_index, 
+                            StageMetrics(self._name, stage.stage_name),
+                            self._pool,
+                        )
                     )
                 )
 
@@ -61,8 +71,8 @@ class Pipeline(Generic[T]):
             return
 
         for stage in self._stages:
-            for _ in range(stage.config.workers):
-                await stage._in_q.put(_SENTINEL)
+            for _ in range(len(stage.fns)):
+                await stage.in_q.put(_SENTINEL)
 
         await asyncio.gather(*self._workers, return_exceptions=True)
         self._workers.clear()
@@ -75,7 +85,9 @@ class Pipeline(Generic[T]):
     def available_slots(self) -> int:
         if not self._stages:
             return 0
-        return self._stages[0].config.max_queue_size - self._stages[0]._in_q.qsize()
+
+        q = self._stages[0].in_q
+        return q.maxsize - q.qsize()
 
     async def submit(self, payload: Any) -> Any:
         """Submit a single request and wait for its result."""
@@ -83,7 +95,7 @@ class Pipeline(Generic[T]):
         fut: asyncio.Future = asyncio.get_event_loop().create_future()
         self._futures[req_id] = fut
 
-        await self._stages[0]._in_q.put((req_id, payload))
+        await self._stages[0].in_q.put((req_id, payload))
 
         try:
             return await fut
@@ -95,34 +107,41 @@ class Pipeline(Generic[T]):
         if not self._running:
             return False
         req_id = next(self._counter)
-        await self._stages[0]._in_q.put((req_id, payload))
+        await self._stages[0].in_q.put((req_id, payload))
         return True
 
     async def report(self) -> StatusReport:
+        worker_idx = 0
+        stage_infos: list[StageInfo] = []
+
+        for stage in self._stages:
+            n_fns = len(stage.fns)
+            alive = sum(
+                1 for w in self._workers[worker_idx : worker_idx + n_fns]
+                if not w.done()
+            )
+            stage_infos.append(
+                StageInfo(
+                    name=stage.stage_name,
+                    workers_alive=alive,
+                    workers_total=n_fns,
+                    queue_depth=stage.in_q.qsize(),
+                    queue_capacity=stage.in_q.maxsize,
+                )
+            )
+            worker_idx += n_fns
+
         is_available = (
-            len(self._stages) > 0
-            and self._running
-            and all(stage.config.workers > 0 for stage in self._stages)
-        )
-
-        cnt_stage_instances: dict[str, int] = {
-            stage.config.stage_name: 0 for stage in self._stages
-        }
-
-        for worker, stage in zip(self._workers, self._stages):
-            if not worker.done():
-                cnt_stage_instances[stage.config.stage_name] += 1
-
-        is_available &= all(
-            cnt_stage_instances[stage.config.stage_name] > 0
-            for stage in self._stages
+            self._running
+            and len(self._stages) > 0
+            and all(si.workers_alive > 0 for si in stage_infos)
         )
 
         return StatusReport(
-            stats=[stage.tracker for stage in self._stages],
             running=self._running,
             available=is_available,
             slots=self.available_slots(),
+            stages=stage_infos,
         )
 
     async def __aenter__(self):
