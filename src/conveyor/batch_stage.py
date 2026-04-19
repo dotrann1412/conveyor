@@ -7,8 +7,7 @@ import os
 import time
 from typing import Any, Awaitable, Callable, Generic, TypeVar
 
-from conveyor.types import _SENTINEL, IStage
-from conveyor.metrics import StageMetrics
+from conveyor.types import _SENTINEL, IStage, PipelineRuntime
 from concurrent.futures import ThreadPoolExecutor
 
 T = TypeVar("T")
@@ -64,10 +63,8 @@ class BatchStage(Generic[T], IStage):
     async def _worker(
         self,
         next_q: asyncio.Queue | None,
-        results: dict[int, asyncio.Future],
+        runtime: PipelineRuntime,
         runner_index: int,
-        metrics: StageMetrics,
-        executor: ThreadPoolExecutor | None = None,
     ):
         fn = self._fns[runner_index]
         logger = logging.getLogger(f"batch:{self._stage_name}:{runner_index}")
@@ -104,24 +101,24 @@ class BatchStage(Generic[T], IStage):
 
             t0 = time.perf_counter()
             try:
-                outputs = await self._run_fn(fn, (payloads,), executor=executor)
+                outputs = await self._run_fn(fn, (payloads,), executor=runtime.pool)
                 elapsed = time.perf_counter() - t0
 
                 logger.info("Batch of %d finished in %.2fs", batch_len, elapsed)
-                metrics.record_success(batch_len, elapsed)
+                runtime.metrics.record_success(batch_len, elapsed)
 
                 for rid, out in zip(req_ids, outputs):
                     if next_q is not None:
                         await next_q.put((rid, out))
-                    elif rid in results:
-                        results[rid].set_result(out)
+                    elif rid in runtime.futures:
+                        runtime.futures[rid].set_result(out)
 
             except Exception as e:
                 elapsed = time.perf_counter() - t0
                 logger.error("Batch error: %s", e)
 
-                metrics.record_failure(batch_len, elapsed)
+                runtime.metrics.record_failure(batch_len, elapsed)
 
                 for rid in req_ids:
-                    if rid in results and not results[rid].done():
-                        results[rid].set_exception(e)
+                    if rid in runtime.futures and not runtime.futures[rid].done():
+                        runtime.futures[rid].set_exception(e)

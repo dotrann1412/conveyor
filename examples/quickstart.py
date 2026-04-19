@@ -105,14 +105,5 @@ async def main():
     print("--------------------------------")
 
 
-    from conveyor.server import create_app
-    app = create_app(pipeline, str, str)
-    
-    import uvicorn
-    config = uvicorn.Config(app, host="0.0.0.0", port=8000, reload=True)
-    server = uvicorn.Server(config)
-
-    await server.serve() 
-
 if __name__ == "__main__":
     asyncio.run(main())

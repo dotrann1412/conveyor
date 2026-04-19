@@ -22,8 +22,6 @@ try:
         Histogram,
         CollectorRegistry,
         disable_created_metrics,
-        generate_latest,
-        CONTENT_TYPE_LATEST,
     )
 
     _HAS_PROMETHEUS = True

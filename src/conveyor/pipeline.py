@@ -6,7 +6,7 @@ import logging
 from itertools import count
 from typing import Any, Generic, TypeVar
 
-from conveyor.types import _SENTINEL, IStage
+from conveyor.types import _SENTINEL, IStage, PipelineRuntime
 from conveyor.metrics import StageMetrics
 from conveyor.tracker import StatusReport, StageInfo
 from concurrent.futures import ThreadPoolExecutor
@@ -51,17 +51,23 @@ class Pipeline(Generic[T]):
             logger.info("Starting thread pool with %d workers", pool_size)
             self._pool = ThreadPoolExecutor(max_workers=pool_size)
 
+
         for i, stage in enumerate(self._stages):
             next_q = self._stages[i + 1].in_q if i + 1 < len(self._stages) else None
+
+            pipeline_runtime = PipelineRuntime(
+                pool=self._pool, 
+                futures=self._futures, 
+                metrics=StageMetrics(self._name, stage.stage_name)
+            )
+
             for runner_index in range(len(stage.fns)):
                 self._workers.append(
                     asyncio.create_task(
                         stage._worker(
-                            next_q, 
-                            self._futures, 
+                            next_q,
+                            pipeline_runtime,
                             runner_index, 
-                            StageMetrics(self._name, stage.stage_name),
-                            self._pool,
                         )
                     )
                 )

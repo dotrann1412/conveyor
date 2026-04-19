@@ -8,9 +8,16 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Callable, Awaitable, Any
 from concurrent.futures import ThreadPoolExecutor
 import asyncio
+from dataclasses import dataclass
 
 if TYPE_CHECKING:
     from conveyor.metrics import StageMetrics
+
+@dataclass
+class PipelineRuntime:
+    pool: ThreadPoolExecutor | None
+    futures: dict[int, asyncio.Future]
+    metrics: StageMetrics
 
 class IStage(ABC):
     _metrics: StageMetrics | None
@@ -38,9 +45,7 @@ class IStage(ABC):
     async def _worker(
         self, 
         next_q: asyncio.Queue | None, 
-        results: dict[int, asyncio.Future], 
+        runtime: PipelineRuntime, 
         runner_index: int, 
-        metrics: StageMetrics,
-        executor: ThreadPoolExecutor | None = None,
     ):
         ...
