@@ -66,9 +66,6 @@ gantt
 
 ```bash
 pip install conveyor
-
-# with FastAPI server support
-pip install conveyor[server]
 ```
 
 ## Quick start
