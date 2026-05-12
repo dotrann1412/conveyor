@@ -93,8 +93,8 @@ DEVICE_IDS = [0]  # [0, 1] for two GPUs
 async def main():
     pipeline = Pipeline(
         stages=[
-            Stage([make_diffusion_stage(did) for did in DEVICE_IDS], queue_size_per_worker=4, stage_name="denoise"),
-            Stage([save_image] * 2, queue_size_per_worker=4, stage_name="save"),
+            Stage([make_diffusion_stage(did) for did in DEVICE_IDS], max_qsize=len(DEVICE_IDS) * 4, stage_name="denoise"),
+            Stage([save_image] * 2, max_qsize=8, stage_name="save"),
         ],
         name="stable-diffusion-t2i",
     )

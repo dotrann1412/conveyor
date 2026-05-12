@@ -127,9 +127,9 @@ inputs = [
 async def main():
     pipeline = Pipeline(
         stages=[
-            Stage([download_image] * 4, queue_size_per_worker=4, stage_name="download"),
-            Stage([make_img2img_stage(did) for did in DEVICE_IDS], queue_size_per_worker=4, stage_name="img2img"),
-            Stage([upload_result] * 4, queue_size_per_worker=4, stage_name="upload"),
+            Stage([download_image] * 4, max_qsize=16, stage_name="download"),
+            Stage([make_img2img_stage(did) for did in DEVICE_IDS], max_qsize=len(DEVICE_IDS) * 4, stage_name="img2img"),
+            Stage([upload_result] * 4, max_qsize=16, stage_name="upload"),
         ],
         name="stable-diffusion-i2i",
     )

@@ -22,11 +22,11 @@ class Stage(Generic[T], IStage):
     def __init__(
         self,
         fns: list[Callable[..., Awaitable[Any] | Any]],
-        queue_size_per_worker: int,
+        max_qsize: int,
         stage_name: str | None = None,
     ):
         self._fns: list[Callable[..., Awaitable[Any] | Any]] = fns
-        self._in_q: asyncio.Queue = asyncio.Queue(maxsize=len(fns) * queue_size_per_worker)
+        self._in_q: asyncio.Queue = asyncio.Queue(maxsize=max_qsize)
         self._stage_name: str = stage_name or os.urandom(2).hex()
 
     @property

@@ -23,13 +23,13 @@ class BatchStage(Generic[T], IStage):
     def __init__(
         self,
         fns: list[Callable[..., Awaitable[Any] | Any]],
-        worker_queue_size: int,
+        max_qsize: int,
         max_batch_size: int,
         timeout_s: float,
         stage_name: str | None = None,
     ):
         self._fns: list[Callable[..., Awaitable[Any] | Any]] = fns
-        self._in_q: asyncio.Queue = asyncio.Queue(maxsize=len(fns) * worker_queue_size)
+        self._in_q: asyncio.Queue = asyncio.Queue(maxsize=max_qsize)
         self._stage_name: str = stage_name or os.urandom(2).hex()
         self._max_batch_size = max_batch_size
         self._timeout_s = timeout_s

@@ -57,15 +57,15 @@ async def postprocess(data: str) -> str:
 async def main():
     pipeline = Pipeline(
         stages=[
-            Stage([preprocess] * 4, queue_size_per_worker=1024, stage_name="preprocess"),
+            Stage([preprocess] * 4, max_qsize=4096, stage_name="preprocess"),
             BatchStage(
                 [model_batch_infer] * 1,
-                worker_queue_size=128,
+                max_qsize=128,
                 max_batch_size=32,
                 timeout_s=0.05,
                 stage_name="model",
             ),
-            Stage([postprocess] * 4, queue_size_per_worker=1024, stage_name="postprocess"),
+            Stage([postprocess] * 4, max_qsize=4096, stage_name="postprocess"),
         ],
         name="quickstart",
     )

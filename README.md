@@ -62,7 +62,7 @@ gantt
 
 > Stages overlap — GPU never waits for CPU for pre/post processing. With 2 GPUs, throughput scales linearly.
 
-## Installations
+## Installation
 
 ```bash
 pip install conveyor
@@ -70,9 +70,11 @@ pip install conveyor
 
 ## Quick start
 
+A stage takes a **list of functions** — one per concurrent worker. Sync functions run on a shared thread pool; coroutines run on the event loop.
+
 ```python
 import asyncio
-from conveyor import Pipeline, Stage, BatchStage, StageConfig, BatchConfig
+from conveyor import Pipeline, Stage, BatchStage
 
 async def preprocess(data: str) -> str:
     return data.upper()
@@ -84,9 +86,15 @@ async def postprocess(data: str) -> str:
     return f"done:{data}"
 
 pipeline = Pipeline(stages=[
-    Stage(preprocess, StageConfig(workers=4, stage_name="pre")),
-    BatchStage(model_infer, BatchConfig(max_batch_size=8, timeout_s=0.05)),
-    Stage(postprocess, StageConfig(workers=4, stage_name="post")),
+    Stage([preprocess] * 4, max_qsize=512, stage_name="pre"),
+    BatchStage(
+        [model_infer],
+        max_qsize=128,
+        max_batch_size=8,
+        timeout_s=0.05,
+        stage_name="model",
+    ),
+    Stage([postprocess] * 4, max_qsize=512, stage_name="post"),
 ])
 
 async def main():
@@ -96,65 +104,77 @@ async def main():
 
 asyncio.run(main())
 ```
-* re-write the `preprocess`, `model_infer`, `postprocess` your own; `data`, `batch` can be at any type.
+
+Bring your own `preprocess`, `model_infer`, `postprocess` — `data` and `batch` can be any type.
 
 ## Multi-GPU
 
-For more than 1 GPU, use `from_factory` to create inference function for each:
+Build one worker function per GPU with a factory, then pass them as a list. Each worker keeps its own model bound to its own device:
 
 ```python
-def load_model() -> torch.nn.Module:
-    return torch.nn.Module() # just an example
+import asyncio
+import torch
 
 def make_model(device_id: int):
     model = load_model().to(f"cuda:{device_id}")
 
     async def infer(batch: list) -> list:
-        return await asyncio.to_thread(model, batch) # avoid blocking io
+        # offload the blocking GPU call so other stages keep running
+        return await asyncio.to_thread(model, batch)
 
     return infer
 
-model_stage = BatchStage.from_factory(
-    fn_factory=make_model,
-    device_ids=[0, 1, 2, 3], # load model on cuda 0, 1, 2, 3
-    batch_config=BatchConfig(max_batch_size=16, timeout_s=0.05),
-    stage_config=StageConfig(stage_name="model"),
+model_stage = BatchStage(
+    fns=[make_model(d) for d in [0, 1, 2, 3]],  # one worker per GPU
+    max_qsize=64,
+    max_batch_size=16,
+    timeout_s=0.05,
+    stage_name="model",
 )
 
-# then initialize the pipeline as in the quickstart section
 pipeline = Pipeline(stages=[
-    Stage(preprocess, StageConfig(workers=4, stage_name="pre")),
+    Stage([preprocess] * 4, max_qsize=512, stage_name="pre"),
     model_stage,
-    Stage(postprocess, StageConfig(workers=4, stage_name="post")),
+    Stage([postprocess] * 4, max_qsize=512, stage_name="post"),
 ])
 ```
-<!-- 
-## Progress tracking
 
-Long-running stages (e.g. diffusion) can report step progress:
-
-```python
-async def denoise(batch: list, progress=None) -> list:
-    for step in range(100):
-        batch = do_step(batch, step)
-
-        if progress: # optional; this feature is useful to accurately setting up scheduling 
-            progress(step + 1, 100)
-
-    return batch
-```
-
-Inspect live progress via `pipeline.report()` or the `/report` endpoint. 
--->
+The same pattern works with plain `Stage` when you don't need batching — see [`examples/stable_diffusion_t2i.py`](examples/stable_diffusion_t2i.py).
 
 ## Serve over HTTP
 
-```python
-from conveyor.server import create_app
+Conveyor is framework-agnostic — `pipeline.submit` is the only thing a handler needs:
 
-app = create_app(pipeline, prefix="/model")
-# uvicorn myapp:app
+```python
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with pipeline:
+        yield
+
+app = FastAPI(lifespan=lifespan)
+
+@app.post("/infer")
+async def infer(payload: dict):
+    return await pipeline.submit(payload)
 ```
+
+Check pipeline health with `await pipeline.report()` — returns per-stage queue depth, worker count, and utilization.
+
+## Metrics
+
+Install with the `metrics` extra to expose Prometheus counters and histograms (labels: `pipeline`, `stage`, `status`):
+
+```bash
+pip install "conveyor[metrics]"
+```
+
+- `conveyor_items_total` — throughput and error rate
+- `conveyor_processing_duration_seconds` — latency histogram
+
+Without `prometheus_client` installed, every recording call is a silent no-op.
 
 ## Benchmark
 
@@ -171,13 +191,13 @@ The GPU never waits for save/upload — while image N is uploading, image N+1 is
 
 | Example | Description |
 |---|---|
-| [`quickstart.py`](examples/quickstart.py) | Minimal pipeline, no GPU needed |
-| [`yolo_detection.py`](examples/yolo_detection.py) | YOLO object detection with batching |
-| [`stable_diffusion_t2i.py`](examples/stable_diffusion_t2i.py) | Image generation pipeline |
-| [`stable_diffusion_i2i.py`](examples/stable_diffusion_i2i.py) | Image editing pipeline |
+| [`quickstart.py`](examples/quickstart.py) | Minimal 3-stage pipeline, no GPU needed |
+| [`stable_diffusion_t2i.py`](examples/stable_diffusion_t2i.py) | Text-to-image with multi-GPU pattern |
+| [`stable_diffusion_i2i.py`](examples/stable_diffusion_i2i.py) | Image-to-image editing pipeline |
+| [`light_on_ocr_pipeline.py`](examples/light_on_ocr_pipeline.py) | OCR with the LightOnOCR-2-1B model |
 
 ## License
 
 MIT
 
-*(images under `examples/images` are collected from [CelebA dataset](https://www.kaggle.com/datasets/jessicali9530/celeba-dataset), and just used for demo purposes)*
+*(images under `examples/images` are collected from the [CelebA dataset](https://www.kaggle.com/datasets/jessicali9530/celeba-dataset), used for demo purposes only)*

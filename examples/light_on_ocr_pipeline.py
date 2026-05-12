@@ -136,11 +136,11 @@ async def lifespan(app: FastAPI):
 
     async with Pipeline(
         stages=[
-            Stage([initialize_stage] * 8, queue_size_per_worker=100),
-            Stage([model_pre], queue_size_per_worker=100),
-            Stage([model_gen], queue_size_per_worker=100),
-            Stage([model_post], queue_size_per_worker=100),
-            Stage([finalize_stage], queue_size_per_worker=100),
+            Stage([initialize_stage] * 8, max_qsize=800),
+            Stage([model_pre], max_qsize=100),
+            Stage([model_gen], max_qsize=100),
+            Stage([model_post], max_qsize=100),
+            Stage([finalize_stage], max_qsize=100),
         ]
     ) as app.state.pipeline:
         yield
