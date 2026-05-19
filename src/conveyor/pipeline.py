@@ -22,8 +22,15 @@ class Pipeline(Generic[T]):
     while request A is in the model stage, request B can be preprocessing.
     """
 
-    def __init__(self, stages: list[IStage], *, name: str = "default"):
+    def __init__(
+        self,
+        stages: list[IStage],
+        *,
+        fallback: IStage | None = None,
+        name: str = "default",
+    ):
         self._stages = stages
+        self._fallback = fallback
         self._name = name
         self._futures: dict[int, asyncio.Future] = {}
         self._counter = count()
@@ -41,15 +48,19 @@ class Pipeline(Generic[T]):
 
         self._running = True
 
-        pool_size = 0
-        for stage in self._stages:
-            for fn in stage.fns:
-                if not inspect.iscoroutinefunction(fn):
-                    pool_size += 1
+        all_stages = self._stages + ([self._fallback] if self._fallback else [])
+        pool_size = sum(
+            1
+            for stage in all_stages
+            for fn in stage.fns
+            if not inspect.iscoroutinefunction(fn)
+        )
 
         if pool_size > 0:
             logger.info("Starting thread pool with %d workers", pool_size)
             self._pool = ThreadPoolExecutor(max_workers=pool_size)
+
+        err_q = self._fallback.in_q if self._fallback else None
 
         for i, stage in enumerate(self._stages):
             next_q = self._stages[i + 1].in_q if i + 1 < len(self._stages) else None
@@ -57,11 +68,27 @@ class Pipeline(Generic[T]):
                 self._workers.append(
                     asyncio.create_task(
                         stage._worker(
-                            next_q, 
-                            self._futures, 
-                            runner_index, 
+                            next_q,
+                            self._futures,
+                            runner_index,
                             StageMetrics(self._name, stage.stage_name),
                             self._pool,
+                            err_q=err_q,
+                        )
+                    )
+                )
+
+        if self._fallback is not None:
+            for runner_index in range(len(self._fallback.fns)):
+                self._workers.append(
+                    asyncio.create_task(
+                        self._fallback._worker(
+                            None,
+                            self._futures,
+                            runner_index,
+                            StageMetrics(self._name, self._fallback.stage_name),
+                            self._pool,
+                            err_q=None,
                         )
                     )
                 )
@@ -70,11 +97,18 @@ class Pipeline(Generic[T]):
         if not self._running:
             return
 
+        n_regular = sum(len(s.fns) for s in self._stages)
+
         for stage in self._stages:
             for _ in range(len(stage.fns)):
                 await stage.in_q.put(_SENTINEL)
+        await asyncio.gather(*self._workers[:n_regular], return_exceptions=True)
 
-        await asyncio.gather(*self._workers, return_exceptions=True)
+        if self._fallback is not None:
+            for _ in range(len(self._fallback.fns)):
+                await self._fallback.in_q.put(_SENTINEL)
+            await asyncio.gather(*self._workers[n_regular:], return_exceptions=True)
+
         self._workers.clear()
         self._running = False
 

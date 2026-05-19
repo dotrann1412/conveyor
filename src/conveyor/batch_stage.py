@@ -68,6 +68,7 @@ class BatchStage(Generic[T], IStage):
         runner_index: int,
         metrics: StageMetrics,
         executor: ThreadPoolExecutor | None = None,
+        err_q: asyncio.Queue | None = None,
     ):
         fn = self._fns[runner_index]
         logger = logging.getLogger(f"batch:{self._stage_name}:{runner_index}")
@@ -122,6 +123,10 @@ class BatchStage(Generic[T], IStage):
 
                 metrics.record_failure(batch_len, elapsed)
 
-                for rid in req_ids:
-                    if rid in results and not results[rid].done():
-                        results[rid].set_exception(e)
+                if err_q is not None:
+                    for rid, p in zip(req_ids, payloads):
+                        await err_q.put((rid, p, e))
+                else:
+                    for rid in req_ids:
+                        if rid in results and not results[rid].done():
+                            results[rid].set_exception(e)

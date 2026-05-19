@@ -36,11 +36,12 @@ class IStage(ABC):
 
     @abstractmethod
     async def _worker(
-        self, 
-        next_q: asyncio.Queue | None, 
-        results: dict[int, asyncio.Future], 
-        runner_index: int, 
+        self,
+        next_q: asyncio.Queue | None,
+        results: dict[int, asyncio.Future],
+        runner_index: int,
         metrics: StageMetrics,
         executor: ThreadPoolExecutor | None = None,
+        err_q: asyncio.Queue | None = None,
     ):
         ...

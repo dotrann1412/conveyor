@@ -65,6 +65,7 @@ class Stage(Generic[T], IStage):
         runner_index: int,
         metrics: StageMetrics,
         executor: ThreadPoolExecutor | None = None,
+        err_q: asyncio.Queue | None = None,
     ):
         fn = self._fns[runner_index]
 
@@ -100,7 +101,9 @@ class Stage(Generic[T], IStage):
 
                 metrics.record_failure(1, elapsed)
 
-                if req_id in results and not results[req_id].done():
+                if err_q is not None:
+                    await err_q.put((req_id, payload, e))
+                elif req_id in results and not results[req_id].done():
                     results[req_id].set_exception(e)
 
             finally:
