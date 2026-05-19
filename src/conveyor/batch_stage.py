@@ -5,15 +5,12 @@ import logging
 import inspect
 import os
 import time
-from typing import Any, Awaitable, Callable, Generic, TypeVar
+from typing import Any, Awaitable, Callable
 
 from conveyor.types import _SENTINEL, IStage, PipelineRuntime
 from concurrent.futures import ThreadPoolExecutor
 
-T = TypeVar("T")
-
-
-class BatchStage(Generic[T], IStage):
+class BatchStage(IStage):
     """A stage that collects items into batches before processing.
 
     Waits up to *timeout_s* or until *max_batch_size* items arrive,

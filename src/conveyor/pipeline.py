@@ -4,18 +4,16 @@ import asyncio
 import inspect
 import logging
 from itertools import count
-from typing import Any, Generic, TypeVar
+from typing import Any
 
 from conveyor.types import _SENTINEL, IStage, PipelineRuntime
 from conveyor.metrics import StageMetrics
 from conveyor.tracker import StatusReport, StageInfo
 from concurrent.futures import ThreadPoolExecutor
 
-T = TypeVar("T")
 logger = logging.getLogger(__name__)
 
-
-class Pipeline(Generic[T]):
+class Pipeline:
     """Streaming inference pipeline with stage-level parallelism.
 
     Stages are connected by async queues and run concurrently --

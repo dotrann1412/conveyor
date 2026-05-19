@@ -5,14 +5,12 @@ import logging
 import inspect
 import os
 import time
-from typing import Any, Awaitable, Callable, Generic, TypeVar
+from typing import Any, Awaitable, Callable
 
 from conveyor.types import _SENTINEL, IStage, PipelineRuntime
 from concurrent.futures import ThreadPoolExecutor
 
-T = TypeVar("T")
-
-class Stage(Generic[T], IStage):
+class Stage(IStage):
     """A single processing stage in the pipeline.
 
     Runs *fn* on each item independently, with *workers* concurrent tasks
