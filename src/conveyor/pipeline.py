@@ -119,6 +119,9 @@ class Pipeline(Generic[T]):
             self._pool.shutdown(wait=False)
             self._pool = None
 
+    def inflight_requests(self) -> int:
+        return len(self._futures)
+
     def available_slots(self) -> int:
         if not self._stages:
             return 0
