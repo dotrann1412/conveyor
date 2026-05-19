@@ -19,8 +19,8 @@ class FallbackStage(Stage):
 
     async def _worker(
         self,
-        runtime: PipelineRuntime,
         next_q: asyncio.Queue | None,
+        runtime: PipelineRuntime,
         runner_index: int,
         err_q: asyncio.Queue | None = None,
     ):

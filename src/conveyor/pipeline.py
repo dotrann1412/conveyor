@@ -54,7 +54,11 @@ class Pipeline(Generic[T]):
             for stage in all_stages
             for fn in stage.fns
             if not inspect.iscoroutinefunction(fn)
-        )
+        ) + sum(
+            1
+            for fn in self._fallback.fns
+            if not inspect.iscoroutinefunction(fn)
+        ) if self._fallback else 0
 
         if pool_size > 0:
             logger.info("Starting thread pool with %d workers", pool_size)
@@ -84,6 +88,13 @@ class Pipeline(Generic[T]):
                 )
 
         if self._fallback is not None:
+
+            pipeline_runtime = PipelineRuntime(
+                pool=self._pool, 
+                futures=self._futures, 
+                metrics=StageMetrics(self._name, self._fallback.stage_name)
+            )
+
             for runner_index in range(len(self._fallback.fns)):
                 self._workers.append(
                     asyncio.create_task(
