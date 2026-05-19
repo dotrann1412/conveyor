@@ -60,6 +60,7 @@ class Stage(Generic[T], IStage):
         next_q: asyncio.Queue | None,
         runtime: PipelineRuntime,
         runner_index: int,
+        err_q: asyncio.Queue | None = None,
     ):
         fn = self._fns[runner_index]
 
@@ -95,7 +96,10 @@ class Stage(Generic[T], IStage):
 
                 runtime.metrics.record_failure(1, elapsed)
 
-                if req_id in runtime.futures and not runtime.futures[req_id].done():
+                if err_q is not None:
+                    await err_q.put((req_id, payload, e))
+
+                elif req_id in runtime.futures and not runtime.futures[req_id].done():
                     runtime.futures[req_id].set_exception(e)
 
             finally:

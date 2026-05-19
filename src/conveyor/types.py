@@ -47,5 +47,6 @@ class IStage(ABC):
         next_q: asyncio.Queue | None, 
         runtime: PipelineRuntime, 
         runner_index: int, 
+        err_q: asyncio.Queue | None = None,
     ):
         ...
