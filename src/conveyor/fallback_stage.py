@@ -6,10 +6,8 @@ import time
 from typing import Any
 
 from conveyor.types import _SENTINEL
-from conveyor.metrics import StageMetrics
 from conveyor.stage import Stage
-from concurrent.futures import ThreadPoolExecutor
-
+from conveyor.types import PipelineRuntime
 
 class FallbackStage(Stage):
     """Terminal stage that handles failures from upstream stages.
@@ -21,11 +19,9 @@ class FallbackStage(Stage):
 
     async def _worker(
         self,
+        runtime: PipelineRuntime,
         next_q: asyncio.Queue | None,
-        results: dict[int, asyncio.Future],
         runner_index: int,
-        metrics: StageMetrics,
-        executor: ThreadPoolExecutor | None = None,
         err_q: asyncio.Queue | None = None,
     ):
         fn = self._fns[runner_index]
@@ -43,22 +39,22 @@ class FallbackStage(Stage):
             t0 = time.perf_counter()
 
             try:
-                result = await self._run_fn(fn, (payload, exc), executor=executor)
+                result = await self._run_fn(fn, (payload, exc), executor=runtime.pool)
                 elapsed = time.perf_counter() - t0
 
                 logger.info("Recovered request %s in %.2fs", req_id, elapsed)
-                metrics.record_success(1, elapsed)
+                runtime.metrics.record_success(1, elapsed)
 
-                if req_id in results and not results[req_id].done():
-                    results[req_id].set_result(result)
+                if req_id in runtime.futures and not runtime.futures[req_id].done():
+                    runtime.futures[req_id].set_result(result)
 
             except Exception as e:
                 elapsed = time.perf_counter() - t0
                 logger.error("Fallback failed for request %s: %s", req_id, e)
-                metrics.record_failure(1, elapsed)
+                runtime.metrics.record_failure(1, elapsed)
 
-                if req_id in results and not results[req_id].done():
-                    results[req_id].set_exception(e)
+                if req_id in runtime.futures and not runtime.futures[req_id].done():
+                    runtime.futures[req_id].set_exception(e)
 
             finally:
                 self._in_q.task_done()
