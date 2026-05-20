@@ -52,11 +52,7 @@ class Pipeline:
             for stage in all_stages
             for fn in stage.fns
             if not inspect.iscoroutinefunction(fn)
-        ) + sum(
-            1
-            for fn in self._fallback.fns
-            if not inspect.iscoroutinefunction(fn)
-        ) if self._fallback else 0
+        )
 
         if pool_size > 0:
             logger.info("Starting thread pool with %d workers", pool_size)
